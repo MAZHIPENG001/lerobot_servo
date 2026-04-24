@@ -3,7 +3,12 @@ import  time
 from device.robot import robot_piper
 from device.servo import Servo
 
+'''
+bash find_all_can_port.sh
 
+bash can_activate.sh can0 1000000 "1-9.4:1.0"
+bash can_activate.sh can1 1000000 "1-9.1:1.0"
+'''
 def main():
     piper_l = robot_piper('can0')
     piper_l.ConnectPort()
@@ -22,12 +27,20 @@ def main():
     servo_l = Servo(port='/dev/ttyUSB0', in_min=in_min_orange, in_max=in_max_orange)
     servo_r = Servo(port='/dev/ttyUSB1', in_min=in_min_red, in_max=in_max_red)
 
-    while True:
-        servo_l_joints = servo_l.read_all_angles()
-        # piper_joints=piper_l.read_joint()
-        servo_r_joints = servo_r.read_all_angles()
+    servo_l.start_auto_read()
+    servo_r.start_auto_read()
+    print("⏳ 等待初始数据填充...")
+    time.sleep(0.5)
 
+    while True:
+        servo_l_joints = servo_l.get_latest_angles()
+        servo_r_joints = servo_r.get_latest_angles()
+        if None in servo_l_joints or None in servo_r_joints:
+            print("⚠️ 捕获到不完整数据帧，跳过本次循环...")
+            time.sleep(0.01)
+            continue
         print(f"\33[93m servo_l_joints:{servo_l_joints}\33[0m")
+        print(f"\33[93m servo_l_joints:{servo_r_joints}\33[0m")
         # print(f"\33[92m piper_joints:{piper_joints}\33[0m")
         *map_joints_l, map_gripper_l = servo_l.map_angle_piper(val=servo_l_joints)
         *map_joints_r, map_gripper_r = servo_r.map_angle_piper(val=servo_r_joints)
@@ -36,7 +49,7 @@ def main():
         piper_l.gripper(map_gripper_l)
         piper_r.move_a(*map_joints_r)
         piper_r.gripper(map_gripper_r)
-        time.sleep(0.2)
+        time.sleep(0.05)
 
 if __name__ == '__main__':
     main()

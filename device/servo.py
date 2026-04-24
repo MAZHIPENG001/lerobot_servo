@@ -1,8 +1,8 @@
-# https://item.taobao.com/item.htm?from=cart&id=549063298947&mi_id=0000KG1LbWfhTG_c-d-6xvrhBRKi7DFDeuHy6h3fMfW1ALE&skuId=5275236974021&spm=a1z0d.6639537%2F202410.item.d549063298947.18ca7484yW8F4a&upStreamPrice=2673
 import serial
 import time
 import numpy as np
-
+from queue import Queue, Empty
+import threading
 class Servo():
     def __init__(self,port='/dev/ttyUSB0',baudrate=115200,num_joints=7,in_min=[0] * 7,in_max=[0] * 7):
         self.port=port
@@ -11,9 +11,13 @@ class Servo():
         self.ser = serial.Serial(self.port, self.baudrate, timeout=0.5)
         print(f"✅ 成功连接舵机控制板 (端口: {self.port})")
 
+        self.current_angles = [None] * self.num_joints
+        self.angle_lock = threading.Lock()
+        self._is_reading = False
+        self._read_thread = None
+
         self.in_min = in_min
         self.in_max = in_max
-
         self.out_min =  [90000  , 100   , 0         , -100000   , 70000     , 90000     , 0]
         self.out_max =  [-90000 , 180000, -170000   , 100000    , -78000    , -90000    , 70000]
         ''''
@@ -194,6 +198,43 @@ class Servo():
 
         return safe_val.tolist()
 
+    def start_auto_read(self, interval=0.01):
+        """开启后台多线程自动读取"""
+        if self._read_thread is not None and self._read_thread.is_alive():
+            print(f"⚠️ 端口 {self.port} 的读取线程已在运行")
+            return
+
+        self._is_reading = True
+        # 开启守护线程 (daemon=True)，这样主程序意外退出时，子线程会自动销毁
+        self._read_thread = threading.Thread(target=self._auto_read_loop, args=(interval,), daemon=True)
+        self._read_thread.start()
+        print(f"🚀 已开启后台自动读取线程 (端口: {self.port})")
+
+    def _auto_read_loop(self, interval):
+        """后台线程的死循环逻辑"""
+        while self._is_reading:
+            # 耗时的串口读取操作
+            angles = self.read_all_angles()
+
+            # 读取完成后，加锁更新内存中的数据
+            with self.angle_lock:
+                self.current_angles = angles
+
+            # 短暂休眠防止 CPU 占用过高
+            time.sleep(interval)
+
+    def get_latest_angles(self):
+        """主线程调用此方法：瞬间获取最新角度，完全不阻塞"""
+        with self.angle_lock:
+            # 返回一份数据的拷贝，防止外部误修改
+            return list(self.current_angles)
+
+    def stop_auto_read(self):
+        """安全停止后台读取线程"""
+        self._is_reading = False
+        if self._read_thread is not None:
+            self._read_thread.join()
+            print(f"🛑 已停止后台读取线程 (端口: {self.port})")
 if __name__ == "__main__":
     import math
 
