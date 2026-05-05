@@ -1,4 +1,6 @@
 from piper_sdk import *
+
+import openarm_can as oa
 import numpy as np
 from processer.transfer import euler_to_quaternion,transform_matrix
 
@@ -118,6 +120,119 @@ class robot_piper(C_PiperInterface_V2):
         rotation_mats_3x3 = rotation_mats_3x3[index]
         Pixel = Pixel[index]
         return translations, rotation_mats_3x3, Pixel
+
+class robot_openarm():
+    def __init__(self,can="can0",num_joints=7,enabel=False):
+        self.arm = oa.OpenArm(can, True)
+        self.num_joints=num_joints
+        # Initialize arm motors
+        '''
+        self.motor_types=[oa.MotorType.DM4310, oa.MotorType.DM4310]
+        self.send_ids = [0x01, 0x02]
+        self.recv_ids = [0x11, 0x12]
+        '''
+        self.motor_types = oa.MotorType.DM4310
+        # self.arm_motor_types = self.motor_types*self.num_joints
+        self.send_ids = [i+1 for i in range(self.num_joints)]
+        self.recv_ids = [0x10 + sid for sid in self.send_ids]
+        self.gripper_send_id = self.num_joints + 1
+        self.gripper_recv_id = self.gripper_send_id + 0x10
+
+        # [oa.ControlMode.MIT]          MIT 模式 / 阻抗控制模式
+        # [oa.ControlMode.POS_VEL]      *位置-速度模式
+        # [oa.ControlMode.POS_FORCE]    位置-力矩模式
+        self.control_modes_mit = oa.ControlMode.MIT
+        self.control_modes_vel = oa.ControlMode.POS_VEL
+        self.control_modes_force = oa.ControlMode.POS_FORCE
+        # [oa.CallbackMode.IGNORE]      忽略/静默模式
+        # [oa.CallbackMode.PARAM]       参数反馈模式
+        # [oa.CallbackMode.STATE]       *状态反馈模式
+        self.callback_modes_ignore = oa.CallbackMode.IGNORE
+        self.callback_modes_param = oa.CallbackMode.PARAM
+        self.callback_modes_state = oa.CallbackMode.STATE
+
+        self.arm_motor_types=[self.motor_types]*self.num_joints
+        self.gripper_types=self.motor_types
+        self.arm_control_modes=[self.control_modes_vel]*self.num_joints
+        self.gripper_control_mode=self.control_modes_force
+        # Initialize joints & gripper
+        self.arm.init_arm_motors(
+            self.arm_motor_types,
+            self.send_ids,
+            self.recv_ids,
+            self.arm_control_modes  # 如果你的 API 确实支持在这里传入控制模式列表
+        )
+        self.arm.init_gripper_motor(
+            self.gripper_types,
+            self.gripper_send_id,
+            self.gripper_recv_id,
+            self.gripper_control_mode
+        )
+        # self.arm.init_arm_motors(self.motor_types * self.num_joints,
+        #                          self.send_ids,self.recv_ids,
+        #                          self.control_modes_vel * self.num_joints,)
+        # self.arm.init_gripper_motor(self.motor_types, self.num_joints+1,
+        #                             self.num_joints+10, self.control_modes_force)
+
+        self.gripper = self.arm.get_gripper()
+        self.joints = self.arm.get_arm()
+
+        self.arm.set_callback_mode_all(self.callback_modes_state)
+        # Use high-level operations
+        if enabel:
+            self.arm.enable_all()
+        else:
+            self.arm.disable_all()
+        self.arm.recv_all()
+
+    def disable_arm(self):
+        self.arm.disable_all()
+    def enable_arm(self):
+        self.arm.enable_all()
+    def move_zero(self):
+        # return to zero position
+        self.arm.set_callback_mode_all(self.callback_modes_state)
+        self.arm.get_arm().posvel_control_all([oa.PosVelParam(3.14 * 0.0, 0.0)])
+
+    def open_arm(self):
+        pass
+    def mit_controll(self,kp=2.0, kd=0.5, aim_p=None, aim_v=0.0, aim_t=0.0):
+        """需根据关节数量修改aim_p、aim_v等参数"""
+        if aim_p is None:
+            aim_p = [0.0] * len(self.num_joints)  # 默认为全 0
+        if len(aim_p) != self.num_joints:
+            raise ValueError(f"aim_p length ({len(aim_p)}) must match joint count ({self.num_joints})")
+        params = [oa.MITParam(kp, kd, p, aim_v, aim_t) for p in aim_p]
+        # 位置比例增益(Kp) = 2，速度微分增益(Kd) = 0.5，目标位置 = 0，目标速度 = 0，前馈力矩 = 0
+        self.joints.mit_control_all(*params)
+
+    def gripper_controll(self,position=0.0,speed=25.0,torque=1.5):
+        self.gripper.set_position(position, speed_rad_s=speed, torque_pu=torque/10)
+    def gripper_on(self):
+        self.gripper_controll(position=3.14/2)
+    def gripper_off(self):
+        self.gripper_controll(position=0)
+
+    def read_end_pose(self):
+        pass
+    def read_joint(self):
+        self.arm.refresh_all()
+        self.arm.recv_all()
+        for motor in self.joints.get_motors():
+            print(motor.get_position())
+    def read_gripper(self):
+        self.arm.refresh_all()
+        self.arm.recv_all()
+        for motor in self.gripper.get_motors():
+            print(motor.get_position())
+    def read_msg(self):
+        self.arm.refresh_all()
+        self.arm.recv_all()
+        for i, motor in enumerate(self.joints.get_motors()):
+            print(f'joint \33[92m{i}\33[0m: \33[92m{motor.get_position()}\33[0m')
+        for motor in self.gripper.get_motors():
+            # print(motor.get_position())
+            print(f'\33[93mgripper:{motor.get_position()}\33[0m')
 
 if __name__ == '__main__':
     from device.keyboard import KeystrokeCounter, KeyCode
